@@ -1,10 +1,7 @@
 # WiseCare HMIS — Laravel + React
 
 WiseCare is a hospital management system for Kenyan facilities. This project rebuilds it with a **Laravel API backend** and a
-**React frontend**. It uses the **same MySQL tables** as the original PHP version, so a copy of an existing hospital database works
-here unchanged.
-
-The code base has **no comments**. Everything a developer needs to understand a flow is written in this README, flow by flow.
+**React frontend**.
 
 ---
 
