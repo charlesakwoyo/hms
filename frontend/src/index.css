@@ -1,0 +1,329 @@
+@import 'tailwindcss';
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  .epos-mode,
+  .epos-mode * {
+    visibility: visible !important;
+  }
+  .epos-mode {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 80mm !important;
+    max-width: 80mm !important;
+    margin: 0 !important;
+    padding: 3mm !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    font-size: 10px !important;
+  }
+  .epos-mode table {
+    font-size: 9px !important;
+  }
+  .epos-mode h1,
+  .epos-mode h2,
+  .epos-mode h3 {
+    font-size: 12px !important;
+  }
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  .diagnostic-report-print,
+  .diagnostic-report-print * {
+    visibility: visible !important;
+  }
+  .diagnostic-report-print {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 8mm !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+  .diagnostic-report-print table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+  .diagnostic-report-print th,
+  .diagnostic-report-print td {
+    border: 1px solid #999 !important;
+    padding: 6px !important;
+  }
+  .diagnostic-report-print th {
+    font-weight: 700 !important;
+  }
+  .diagnostic-report-print .bg-purple-50\/60 {
+    background: #fff !important;
+  }
+}
+
+.fixed.inset-0 {
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+}
+.fixed.inset-0 > div {
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+@media (max-width: 640px) {
+  .fixed.inset-0 {
+    padding: 0.75rem !important;
+  }
+  .fixed.inset-0 > div {
+    max-height: calc(100vh - 1.5rem);
+  }
+}
+
+.wisecare-billing-modal {
+  width: min(94vw, 1100px) !important;
+  max-height: 94vh !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+}
+.wisecare-billing-modal--payment {
+  width: min(94vw, 980px) !important;
+}
+.wisecare-billing-modal--receipt {
+  width: min(94vw, 210mm) !important;
+}
+.wisecare-form-scroll {
+  max-height: 78vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.wisecare-close-button {
+  min-width: 34px;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm;
+  }
+  body * {
+    visibility: hidden !important;
+  }
+  .a4-invoice,
+  .a4-invoice * {
+    visibility: visible !important;
+  }
+  .a4-invoice {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 190mm !important;
+    min-height: 277mm !important;
+    max-width: 190mm !important;
+    margin: 0 !important;
+    padding: 8mm !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: #fff !important;
+    color: #000 !important;
+    font-size: 10.5pt !important;
+  }
+  .a4-invoice table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+  .a4-invoice th,
+  .a4-invoice td {
+    padding: 4px 6px !important;
+    border-bottom: 1px solid #bbb !important;
+  }
+  .a4-invoice .epos-mode {
+    width: 190mm !important;
+    max-width: 190mm !important;
+  }
+}
+
+.wc-rich-text ul,
+.wc-rich-format ul {
+  list-style: disc;
+  padding-left: 1.4em;
+}
+.wc-rich-text ol,
+.wc-rich-format ol {
+  list-style: decimal;
+  padding-left: 1.4em;
+}
+.wc-rich-text:empty::before {
+  content: attr(data-placeholder);
+  color: #9ca3af;
+}
+
+@media print {
+  body.wc-document-open * {
+    visibility: hidden !important;
+  }
+  body.wc-document-open .wc-document-preview,
+  body.wc-document-open .wc-document-preview * {
+    visibility: visible !important;
+  }
+  body.wc-document-open .wc-document-preview {
+    position: fixed !important;
+    inset: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: #fff !important;
+    overflow: visible !important;
+  }
+  body.wc-document-open .wc-document-preview iframe {
+    width: 100% !important;
+    height: 100% !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+}
+
+@media print {
+  body:has(.ipd-print-target) *:not(:has(.ipd-print-target)):not(.ipd-print-target):not(.ipd-print-target *) {
+    display: none !important;
+  }
+  html:has(.ipd-print-target),
+  body:has(.ipd-print-target),
+  body:has(.ipd-print-target) *:has(.ipd-print-target) {
+    display: block !important;
+    position: static !important;
+    overflow: visible !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    width: auto !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    background: #fff !important;
+    transform: none !important;
+  }
+  body:has(.ipd-print-target) .ipd-print-target,
+  body:has(.ipd-print-target) .ipd-print-target * {
+    visibility: visible !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .ipd-print-target {
+    margin: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+  .ipd-print-target .overflow-x-auto {
+    overflow: visible !important;
+  }
+  .ipd-print-target table {
+    min-width: 0 !important;
+  }
+  .ipd-print-target [data-noprint] {
+    display: none !important;
+  }
+}
+@media print {
+  #printable-inpatient-file {
+    padding: 0 !important;
+  }
+  #printable-inpatient-file > * + * {
+    margin-top: 10px !important;
+  }
+  #printable-inpatient-file > * {
+    break-inside: avoid;
+  }
+  #printable-inpatient-file td,
+  #printable-inpatient-file th {
+    padding: 4px 6px !important;
+  }
+  #printable-inpatient-file > .pt-8 {
+    padding-top: 14px !important;
+  }
+}
+
+@keyframes wc-page-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes wc-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes wc-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes wc-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.wc-page {
+  animation: wc-page-in 0.16s ease-out backwards;
+}
+.wc-fade {
+  animation: wc-fade-in 0.15s ease-out both;
+}
+.wc-pop {
+  animation: wc-pop-in 0.16s ease-out both;
+}
+.wc-toast {
+  animation: wc-toast-in 0.2s ease-out both;
+}
+button,
+a,
+select,
+input,
+textarea {
+  transition:
+    background-color 0.12s,
+    border-color 0.12s,
+    color 0.12s,
+    box-shadow 0.12s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wc-page,
+  .wc-fade,
+  .wc-pop,
+  .wc-toast {
+    animation: none;
+  }
+}
+
+.wc-erp-font {
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+}
