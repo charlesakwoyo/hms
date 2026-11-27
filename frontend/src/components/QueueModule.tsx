@@ -22,6 +22,7 @@ import { getFirstName } from '../utils/nameUtils';
 import { apiClient } from '../services/apiClient';
 import { TvDisplayPanel } from './TvDisplayPanel';
 import { Patient } from '../types';
+import { getNextQueueStation } from '../hooks/useQueue';
 
 interface QueueModuleProps {
   queue: QueueItem[];
@@ -30,6 +31,12 @@ interface QueueModuleProps {
   onCallPatient?: (queueId: string) => void;
   onRecallPatient?: (queueId: string) => void;
   onCompleteAndNext?: (queueId: string, nextStation?: QueueStation) => void;
+  canRecordPayment?: boolean;
+  onRecordConsultationPayment?: (
+    queueId: string,
+    payment: { paymentMethod: 'Cash' | 'M-Pesa' | 'Card' | 'Bank Transfer'; reference?: string },
+  ) => Promise<{ invoiceId: string; destination: string; data: Record<string, any> }>;
+  onContinueAfterPayment?: (queueId: string) => Promise<{ destination: string; data: Record<string, any> }>;
   consultationServices?: SetupConsultationService[];
   patients?: Patient[];
   onSelectConsultationForQueue?: (
@@ -57,6 +64,9 @@ export const QueueModule: React.FC<QueueModuleProps> = ({
   onCallPatient,
   onRecallPatient,
   onCompleteAndNext,
+  canRecordPayment = false,
+  onRecordConsultationPayment,
+  onContinueAfterPayment,
   consultationServices = [],
   patients = [],
   onSelectConsultationForQueue,
@@ -76,6 +86,12 @@ export const QueueModule: React.FC<QueueModuleProps> = ({
   const [queueingPatientId, setQueueingPatientId] = useState<string | null>(null);
   const [editingQueueConsultationId, setEditingQueueConsultationId] = useState<string | null>(null);
   const [savingQueueConsultationId, setSavingQueueConsultationId] = useState<string | null>(null);
+  const [paymentQueueItem, setPaymentQueueItem] = useState<QueueItem | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'M-Pesa' | 'Card' | 'Bank Transfer'>('Cash');
+  const [paymentReference, setPaymentReference] = useState('');
+  const [paymentError, setPaymentError] = useState('');
+  const [paymentSaving, setPaymentSaving] = useState(false);
+  const [continuingQueueId, setContinuingQueueId] = useState<string | null>(null);
 
   const normalizePhone = (value: string = '') => {
     const digits = String(value).replace(/\D/g, '');
@@ -154,6 +170,7 @@ export const QueueModule: React.FC<QueueModuleProps> = ({
     'Radiology',
     'Pharmacy',
     'Billing',
+    'Inpatient Ward',
     'Discharged',
   ];
 
@@ -226,25 +243,6 @@ export const QueueModule: React.FC<QueueModuleProps> = ({
     await apiClient.persistQueueItem(updated);
     window.dispatchEvent(new CustomEvent('wisecare:queue-consultation-type', { detail: updated }));
     await onSelectConsultationForQueue?.(updated, service, fee, subCode);
-  };
-
-  const getNextStation = (curr: QueueStation): QueueStation => {
-    switch (curr) {
-      case 'Registration':
-        return 'Triage';
-      case 'Triage':
-        return 'Consultation';
-      case 'Consultation':
-        return 'Laboratory';
-      case 'Laboratory':
-        return 'Pharmacy';
-      case 'Pharmacy':
-        return 'Billing';
-      case 'Billing':
-        return 'Discharged';
-      default:
-        return 'Discharged';
-    }
   };
 
   const [announceHere, setAnnounceHere] = useState(announcesOnThisComputer());
@@ -368,8 +366,8 @@ export const QueueModule: React.FC<QueueModuleProps> = ({
           <div>
             <h3 className="text-sm font-bold text-gray-900">Registered Patients — Queue for Consultation</h3>
             <p className="text-[10px] text-gray-500">
-              Search registered patients, select a consultation, then WiseCare routes Cash patients to Billing and other categories to
-              Triage.
+              New visits start at Triage. After triage, unpaid cash visits go to Billing; once paid, they continue to Consultation.
+              Non-cash, prepaid, and free visits continue from Triage to Consultation.
             </p>
           </div>
           <div className="relative w-full sm:w-80">
@@ -510,8 +508,10 @@ export const QueueModule: React.FC<QueueModuleProps> = ({
                 </tr>
               ) : (
                 filteredQueue.map((item) => {
-                  const isCash = item.paymentMethod?.toLowerCase().includes('cash');
-                  const isPreTriageUnpaid = isCash && item.consultationFeePaid === false;
+                  const isCash = /cash|m-pesa|mpesa/i.test(item.paymentMethod || '');
+                  const isUnpaidCash = isCash && item.consultationFeePaid !== true;
+                  const isAtBilling = item.currentStation === 'Billing';
+                  const nextStation = getNextQueueStation(item.currentStation, item);
 
                   return (
                     <tr
@@ -545,10 +545,14 @@ export const QueueModule: React.FC<QueueModuleProps> = ({
                       <td className="py-3 px-4">
                         <div className="font-semibold text-gray-900">{getFirstName(item.patientName)}</div>
                         <div className="text-[10px] text-gray-400 font-mono">{item.patientId}</div>
-                        {isPreTriageUnpaid ? (
+                        {isUnpaidCash ? (
                           <div className="inline-flex items-center space-x-1 mt-0.5 px-2 py-0.5 bg-red-100 text-red-800 rounded text-[10px] font-bold">
                             <CreditCard className="w-3 h-3" />
-                            <span>Cash: Pay Consultation at Billing Before Triage</span>
+                            <span>
+                              {item.priority === 'Emergency'
+                                ? 'Emergency: payment after immediate care'
+                                : 'Cash: Triage first, then pay at Billing'}
+                            </span>
                           </div>
                         ) : item.paymentMethod ? (
                           <div className="text-[10px] text-gray-500 font-medium mt-0.5">{item.paymentMethod}</div>
@@ -660,7 +664,7 @@ export const QueueModule: React.FC<QueueModuleProps> = ({
                       <td className="py-3 px-4">
                         <span
                           className={`inline-flex items-center px-2.5 py-0.5 rounded-full font-bold text-[11px] ${
-                            item.currentStation === 'Billing' && isPreTriageUnpaid
+                            item.currentStation === 'Billing' && isUnpaidCash
                               ? 'bg-amber-100 text-amber-900 border border-amber-300'
                               : 'bg-blue-100 text-blue-800'
                           }`}
@@ -718,31 +722,73 @@ export const QueueModule: React.FC<QueueModuleProps> = ({
                                 <RotateCcw className="w-3 h-3" />
                                 <span>Re-Call</span>
                               </button>
-                              <button
+                              {!isAtBilling && nextStation && <button
                                 type="button"
-                                title="Complete consultation/encounter and forward to next station"
+                                title="Complete this station and forward to the next care station"
                                 onClick={() => {
-                                  const nextSt = getNextStation(item.currentStation);
-                                  onCompleteAndNext?.(item.id, nextSt);
+                                  onCompleteAndNext?.(item.id, nextStation);
                                 }}
                                 className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-[10px] flex items-center space-x-1 shadow-2xs"
                               >
                                 <Check className="w-3 h-3" />
                                 <span>Complete</span>
-                              </button>
+                              </button>}
                             </>
                           )}
                         </div>
                       </td>
                       <td className="py-3 px-4 text-right">
-                        {item.currentStation !== 'Discharged' ? (
+                        {item.currentStation === 'Billing' ? (
+                          isUnpaidCash ? (
+                            canRecordPayment && onRecordConsultationPayment ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPaymentQueueItem(item);
+                                  setPaymentMethod('Cash');
+                                  setPaymentReference('');
+                                  setPaymentError('');
+                                }}
+                                className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md font-bold text-[11px]"
+                              >
+                                <CreditCard className="w-3.5 h-3.5" />
+                                <span>Record Payment</span>
+                              </button>
+                            ) : (
+                              <span className="text-[11px] font-semibold text-amber-800">Awaiting cashier payment</span>
+                            )
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={!onContinueAfterPayment || continuingQueueId === item.id}
+                              onClick={async () => {
+                                if (!onContinueAfterPayment) return;
+                                setContinuingQueueId(item.id);
+                                try {
+                                  const result = await onContinueAfterPayment(item.id);
+                                  window.alert(`Patient continued to ${result.destination}.`);
+                                } catch (error) {
+                                  window.alert((error as Error).message || 'The patient could not be routed to care.');
+                                } finally {
+                                  setContinuingQueueId(null);
+                                }
+                              }}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md font-bold text-[11px] disabled:opacity-50"
+                            >
+                              <span>{continuingQueueId === item.id ? 'Routing…' : 'Continue to care'}</span>
+                              <ArrowRight className="w-3 h-3" />
+                            </button>
+                          )
+                        ) : item.currentStation !== 'Discharged' && nextStation ? (
                           <button
-                            onClick={() => onMoveStation(item.id, getNextStation(item.currentStation))}
+                            onClick={() => onMoveStation(item.id, nextStation)}
                             className="inline-flex items-center space-x-1 px-3 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-md font-bold text-[11px] border border-blue-200 transition"
                           >
-                            <span>Forward to {getNextStation(item.currentStation)}</span>
+                            <span>Forward to {nextStation}</span>
                             <ArrowRight className="w-3 h-3" />
                           </button>
+                        ) : item.currentStation !== 'Discharged' ? (
+                          <span className="text-[11px] text-slate-600">No automatic next step. Continue only when care is ordered.</span>
                         ) : (
                           <span className="text-[11px] text-emerald-700 font-bold flex items-center justify-end space-x-1">
                             <CheckCircle2 className="w-3.5 h-3.5" />
@@ -758,6 +804,84 @@ export const QueueModule: React.FC<QueueModuleProps> = ({
           </table>
         </div>
       </div>
+      {paymentQueueItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <form
+            className="w-full max-w-md space-y-4 rounded-xl bg-white p-6 shadow-2xl"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              if (!onRecordConsultationPayment || paymentSaving) return;
+              setPaymentError('');
+              setPaymentSaving(true);
+              try {
+                const result = await onRecordConsultationPayment(paymentQueueItem.id, {
+                  paymentMethod,
+                  ...(paymentReference.trim() ? { reference: paymentReference.trim() } : {}),
+                });
+                setPaymentQueueItem(null);
+                window.alert(`Payment recorded on invoice ${result.invoiceId}. Patient routed to ${result.destination}.`);
+              } catch (error) {
+                setPaymentError((error as Error).message || 'Payment could not be recorded.');
+              } finally {
+                setPaymentSaving(false);
+              }
+            }}
+          >
+            <div>
+              <h3 className="text-base font-bold text-gray-900">Record consultation payment</h3>
+              <p className="mt-1 text-xs text-gray-600">
+                {paymentQueueItem.patientName} · {paymentQueueItem.ticketNumber} · {paymentQueueItem.consultationType}
+              </p>
+            </div>
+            <div className="rounded-lg bg-slate-50 p-3 text-sm">
+              Amount due: <strong>KSh {Number(paymentQueueItem.consultationFee || 0).toLocaleString()}</strong>
+            </div>
+            <label className="block text-xs font-semibold text-gray-700">
+              Payment method
+              <select
+                value={paymentMethod}
+                onChange={(event) => setPaymentMethod(event.target.value as typeof paymentMethod)}
+                className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+              >
+                <option value="Cash">Cash</option>
+                <option value="M-Pesa">M-Pesa</option>
+                <option value="Card">Card</option>
+                <option value="Bank Transfer">Bank Transfer</option>
+              </select>
+            </label>
+            {paymentMethod === 'M-Pesa' && (
+              <label className="block text-xs font-semibold text-gray-700">
+                M-Pesa transaction code
+                <input
+                  required
+                  value={paymentReference}
+                  onChange={(event) => setPaymentReference(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  maxLength={150}
+                />
+              </label>
+            )}
+            {paymentError && <p className="rounded bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{paymentError}</p>}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPaymentQueueItem(null)}
+                disabled={paymentSaving}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-xs font-bold text-gray-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={paymentSaving || !canRecordPayment}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
+              >
+                {paymentSaving ? 'Recording…' : 'Confirm payment'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };

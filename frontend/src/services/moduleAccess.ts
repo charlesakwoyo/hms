@@ -5,10 +5,22 @@ export const ADMIN_ROLE = 'System Administrator';
 
 export const MODULE_RIGHTS: Record<ModuleType, string[]> = {
   dashboard: [],
-  patients: ['patients:read', 'patients:create', 'patients:edit'],
+  patients: [
+    'patient.view',
+    'patient.create',
+    'patient.update',
+    'patient.deactivate',
+    'patient:view',
+    'patient:create',
+    'patient:update',
+    'patient:deactivate',
+    'patients:read',
+    'patients:create',
+    'patients:edit',
+  ],
   walkin: ['walkin:manage'],
   appointments: ['appointments:manage'],
-  queue: ['queue:manage', 'queue:tv'],
+  queue: ['queue.view', 'queue.route', 'queue:view', 'queue:route', 'queue:manage', 'queue:tv'],
   triage: ['triage:vitals'],
   consultation: ['consultation:read', 'consultation:write', 'consultation:diagnose'],
   dental: ['dental:manage', 'consultation:write'],
@@ -115,6 +127,8 @@ export interface Access {
 
   has: (right: string) => boolean;
 
+  anyOf: (rights: string[]) => boolean;
+
   form: (all: string | string[], right: string) => boolean;
 }
 
@@ -142,8 +156,9 @@ export const accessFor = (roleName: string, roles: SecurityRole[]): Access => {
     return any(MODULE_RIGHTS[m] || []);
   };
   const has = (right: string) => isAdmin || rights.has(right);
+  const anyOf = (list: string[]) => isAdmin || list.some((right) => rights.has(right));
   const form = (all: string | string[], right: string) => has(right) || ([] as string[]).concat(all).some(has);
-  return { isAdmin, roleMissing: !isAdmin && !role, canOpen, canOpenIpd, has, form };
+  return { isAdmin, roleMissing: !isAdmin && !role, canOpen, canOpenIpd, has, anyOf, form };
 };
 
 export const STARTER_RIGHTS: Record<string, string[]> = {
@@ -233,12 +248,22 @@ export const STARTER_RIGHTS: Record<string, string[]> = {
     'reprints:print',
   ],
 };
-export const starterRightsFor = (roleName: string) =>
-  STARTER_RIGHTS[
-    String(roleName || '')
-      .trim()
-      .toLowerCase()
-  ] || ['patients:read'];
+const CANONICAL_RIGHT_ALIASES: Record<string, string[]> = {
+  'patients:read': ['patient.view', 'patient:view', 'visit.view', 'visit:view', 'queue.view', 'queue:view'],
+  'patients:create': ['patient.create', 'patient:create', 'visit.create', 'visit:create'],
+  'patients:edit': ['patient.update', 'patient:update', 'patient.deactivate', 'patient:deactivate', 'visit.cancel', 'visit:cancel'],
+  'queue:manage': ['queue.view', 'queue:view', 'queue.route', 'queue:route'],
+};
+
+export const starterRightsFor = (roleName: string) => {
+  const base =
+    STARTER_RIGHTS[
+      String(roleName || '')
+        .trim()
+        .toLowerCase()
+    ] || ['patients:read'];
+  return [...new Set(base.flatMap((right) => [right, ...(CANONICAL_RIGHT_ALIASES[right] || [])]))];
+};
 
 export const FINANCE_PAGE_RIGHTS: Record<string, string> = {
   revenue: 'finance:revenue',

@@ -5,15 +5,20 @@ import { Header } from './components/Header';
 import { LoginPage, type SessionUser as LoginUser } from './components/LoginPage';
 import { PatientsModule } from './components/PatientsModule';
 import { QueueModule } from './components/QueueModule';
+import { ConsultationModule } from './components/ConsultationModule';
+import { LaboratoryModule } from './components/LaboratoryModule';
+import { InpatientModule } from './components/InpatientModule';
+import type { IpdView } from './components/inpatient/ipdViews';
 import { Sidebar } from './components/Sidebar';
 import { SystemSetupModule } from './components/SystemSetupModule';
+import { TriageModule } from './components/TriageModule';
 import { useQueue } from './hooks/useQueue';
 import { useSession } from './hooks/useSession';
 import { apiClient } from './services/apiClient';
 import { accessFor, SETUP_TAB_RIGHTS } from './services/moduleAccess';
-import type { HospitalConfig, ModuleType, Patient, QueueItem, SecurityRole, UserRole } from './types';
+import type { HospitalConfig, LaboratoryPage, ModuleType, Patient, PatientSaveOutcome, QueueItem, SecurityRole, UserRole, Ward } from './types';
 
-const BUILT_MODULES: ModuleType[] = ['dashboard', 'patients', 'queue', 'system_setup'];
+const BUILT_MODULES: ModuleType[] = ['dashboard', 'patients', 'queue', 'triage', 'consultation', 'laboratory', 'inpatient', 'system_setup'];
 
 const DEFAULT_CONFIG = {
   hospitalName: 'WiseCare Hospital',
@@ -64,7 +69,10 @@ export default function App() {
   const [roles, setRoles] = useState<SecurityRole[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [hospitalConfig, setHospitalConfig] = useState<HospitalConfig>(DEFAULT_CONFIG);
+  const [wards, setWards] = useState<Ward[]>([]);
   const [activeModule, setActiveModule] = useState<ModuleType>('dashboard');
+  const [laboratoryPage, setLaboratoryPage] = useState<LaboratoryPage>('Visits');
+  const [ipdView, setIpdView] = useState<IpdView>('admitted');
   const [previousModule, setPreviousModule] = useState<ModuleType>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [queueFocusPatientId, setQueueFocusPatientId] = useState<string>();
@@ -74,14 +82,16 @@ export default function App() {
   const access = useMemo(() => accessFor(role, roles), [role, roles]);
 
   const loadAll = useCallback(async () => {
-    const [roleRows, patientRows, configRows] = await Promise.all([
+    const [roleRows, patientPage, configRows, wardRows] = await Promise.all([
       apiClient.getEntity('security-roles'),
-      apiClient.getPatients(),
+      apiClient.getPatients({ perPage: 100 }),
       apiClient.getEntity('hospital-config'),
+      apiClient.getSetupEntity('wards'),
     ]);
     setRoles(roleRows.map(toRole));
-    setPatients(patientRows);
+    setPatients(patientPage.data);
     setHospitalConfig(toConfig(configRows[0]));
+    setWards(wardRows);
     await queueState.load();
   }, [queueState.load]);
 
@@ -98,34 +108,64 @@ export default function App() {
     [activeModule],
   );
 
-  const addPatient = async (data: Omit<Patient, 'id' | 'registeredDate' | 'status'>): Promise<Patient | boolean> => {
+  const addPatient = async (
+    data: Omit<Patient, 'id' | 'registeredDate' | 'status'> & Record<string, any>,
+  ): Promise<PatientSaveOutcome> => {
     const result = await apiClient.persistPatient({ ...data, status: 'Registered', shaVerified: false });
-    if (!result.success) {
-      window.alert(`The patient was not saved.\n\n${result.error || 'Try again; if it keeps happening, tell the System Administrator.'}`);
-      return false;
+    if (result.success && result.patient) {
+      setPatients((current) => [result.patient as Patient, ...current]);
     }
-    const saved = result.data as Patient;
-    setPatients((current) => [saved, ...current]);
+    return result;
+  };
+
+  const updatePatient = async (patient: Patient): Promise<PatientSaveOutcome> => {
+    const result = await apiClient.persistPatient(patient);
+    if (result.success && result.patient) {
+      const saved = result.patient;
+      setPatients((current) => current.map((p) => (p.id === saved.id ? saved : p)));
+    }
+    return result;
+  };
+
+  const changePatientStatus = async (patient: Patient, status: 'Active' | 'Inactive'): Promise<Patient> => {
+    const saved = await apiClient.setPatientStatus(patient.id, status);
+    setPatients((current) => current.map((p) => (p.id === saved.id ? saved : p)));
     return saved;
   };
 
-  const updatePatient = async (patient: Patient): Promise<boolean> => {
-    const result = await apiClient.persistPatient(patient);
-    if (!result.success) {
-      window.alert(
-        `The patient's changes were not saved.\n\n${result.error || 'Try again; if it keeps happening, tell the System Administrator.'}`,
-      );
-      return false;
+  const refreshPatientAndQueue = useCallback(async () => {
+    const [patientPage, wardRows] = await Promise.all([
+      apiClient.getPatients({ perPage: 100 }),
+      apiClient.getSetupEntity('wards'),
+      queueState.load(),
+    ]);
+    setPatients(patientPage.data);
+    setWards(wardRows);
+  }, [queueState.load]);
+
+  const updateWards = async (nextWards: Ward[]) => {
+    const removed = wards.filter((ward) => !nextWards.some((next) => next.id === ward.id));
+    setWards(nextWards);
+    const results = await Promise.all([
+      ...nextWards.map((ward) => apiClient.persistEntity('wards', ward)),
+      ...removed.map((ward) => apiClient.deleteEntity('wards', ward.id)),
+    ]);
+    const failed = results.filter((result) => !result.success);
+    if (failed.length) {
+      window.alert(`Some ward changes were not saved. ${failed.map((result) => result.error).filter(Boolean).join('; ')}`);
+      const savedWards = await apiClient.getSetupEntity('wards');
+      setWards(savedWards);
     }
-    const saved = result.data as Patient;
-    setPatients((current) => current.map((p) => (p.id === saved.id ? saved : p)));
-    return true;
   };
 
   const queuePatient = async (patient: Patient, service: any, fee: number, subCategory: string) => {
-    if (queueState.enqueue(patient, service, fee, subCategory)) {
-      setPatients((current) => current.map((p) => (p.id === patient.id ? { ...p, status: 'In Triage' } : p)));
+    const result = await queueState.enqueue(patient, service, fee, subCategory);
+    if (result.success === false) {
+      window.alert(result.error);
+      return;
     }
+    const status: Patient['status'] = result.destination === 'Billing' ? 'At Billing' : 'In Triage';
+    setPatients((current) => current.map((p) => (p.id === patient.id ? { ...p, status } : p)));
   };
 
   const selectConsultation = async (item: QueueItem, service: any, fee: number, subCategory: string) => {
@@ -177,6 +217,16 @@ export default function App() {
         canOpenIpd={access.canOpenIpd}
         pendingLabCount={0}
         queueCount={activeQueueCount}
+        laboratoryPage={laboratoryPage}
+        ipdView={ipdView}
+        onSelectIpdView={(view) => {
+          setIpdView(view);
+          navigate('inpatient');
+        }}
+        onSelectLaboratoryPage={(page) => {
+          setLaboratoryPage(page);
+          navigate('laboratory');
+        }}
       />
       <div className="flex h-screen flex-1 flex-col overflow-hidden">
         <Header
@@ -210,6 +260,9 @@ export default function App() {
               patients={patients}
               onAddPatient={addPatient}
               onUpdatePatient={updatePatient}
+              can={(rights) => access.anyOf(Array.isArray(rights) ? rights : [rights])}
+              onSetPatientStatus={changePatientStatus}
+              onPatientsChanged={() => void loadAll()}
               onSendToTriage={(patient) => {
                 setQueueFocusPatientId(patient.id);
                 navigate('queue');
@@ -225,11 +278,18 @@ export default function App() {
               onCallPatient={queueState.call}
               onRecallPatient={queueState.call}
               onCompleteAndNext={(id, station) => queueState.completeAndNext(id, patients, station)}
+              canRecordPayment={access.anyOf(['billing:collect'])}
+              onRecordConsultationPayment={queueState.recordConsultationPayment}
+              onContinueAfterPayment={queueState.continueAfterPayment}
               onSelectConsultationForQueue={selectConsultation}
               onQueueRegisteredPatient={queuePatient}
               focusPatientId={queueFocusPatientId}
             />
           )}
+          {activeModule === 'triage' && <TriageModule queue={queueState.queue} onRoute={queueState.route} />}
+          {activeModule === 'consultation' && <ConsultationModule onCallPatient={queueState.call} />}
+          {activeModule === 'laboratory' && <LaboratoryModule page={laboratoryPage} onWorkflowUpdated={queueState.load} />}
+          {activeModule === 'inpatient' && <InpatientModule view={ipdView} onWorkflowUpdated={refreshPatientAndQueue} />}
           {activeModule === 'system_setup' && (
             <SystemSetupModule
               can={(tab) =>
@@ -237,6 +297,8 @@ export default function App() {
               }
               canSaveAll={access.has('system:setup')}
               hospitalConfig={hospitalConfig}
+              wards={wards}
+              onUpdateWards={(next) => void updateWards(next)}
               onUpdateHospitalConfig={(config) => {
                 setHospitalConfig(config);
                 void apiClient.persistEntity('hospital-config', config);

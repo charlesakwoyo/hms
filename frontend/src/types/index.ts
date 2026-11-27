@@ -31,6 +31,8 @@ export type ModuleType =
   | 'reprints'
   | 'phpmysql';
 
+export type LaboratoryPage = 'Visits' | 'Orders' | 'Specimen' | 'Results';
+
 export type UserRole =
   | 'System Administrator'
   | 'Medical Doctor'
@@ -149,6 +151,42 @@ export interface CancerBillingLink {
   status: string;
 }
 
+export interface DuplicateMatch {
+  id: string;
+  patientNumber: string;
+  name: string;
+  phone: string;
+  dob: string | null;
+  nationalId: string | null;
+  lastVisit: string | null;
+  reasons: string[];
+}
+
+export interface PatientPageMeta {
+  currentPage: number;
+  lastPage: number;
+  perPage: number;
+  total: number;
+  from: number | null;
+  to: number | null;
+}
+
+export interface PatientListResponse {
+  data: Patient[];
+  meta: PatientPageMeta;
+}
+
+export interface PatientSaveOutcome {
+  success: boolean;
+  patient?: Patient;
+  error?: string;
+  status?: number;
+  code?: string;
+  matches?: DuplicateMatch[];
+  overrideToken?: string;
+  visitId?: string | null;
+}
+
 export interface Patient {
   id: string;
   visitId?: string;
@@ -180,6 +218,7 @@ export interface Patient {
   registeredDate: string;
   status:
     | 'Active'
+    | 'Inactive'
     | 'Registered'
     | 'In Consultation'
     | 'In Triage'
@@ -195,6 +234,9 @@ export interface Patient {
   currentWard?: string;
   shaVerified?: boolean;
   shaAttendanceToken?: string;
+  activeVisits?: Array<{ id: string; visitId: string; visitNumber: string; status: string | null }>;
+  recentVisits?: any[];
+  queueStatus?: { id: string; ticketNumber: string; currentStation: string | null; status: string | null } | null;
 }
 
 export interface VitalSign {

@@ -19,7 +19,7 @@ import {
   ArrowRight,
   Edit2,
 } from 'lucide-react';
-import { Patient, HospitalConfig } from '../types';
+import { DuplicateMatch, HospitalConfig, Patient, PatientPageMeta, PatientSaveOutcome } from '../types';
 import { ReportHeader } from './ReportHeader';
 import { printPatientSummary } from './PrintDocuments';
 import { apiClient } from '../services/apiClient';
@@ -49,13 +49,48 @@ interface PatientsModuleProps {
   patients: Patient[];
 
   consultations?: Array<{ patientId: string }>;
-  onAddPatient: (newPatient: Omit<Patient, 'id' | 'registeredDate' | 'status'>) => Patient | boolean | Promise<Patient | boolean>;
-  onUpdatePatient?: (patient: Patient) => boolean | Promise<boolean>;
+  onAddPatient: (newPatient: Omit<Patient, 'id' | 'registeredDate' | 'status'> & Record<string, any>) => Promise<PatientSaveOutcome>;
+  onUpdatePatient?: (patient: Patient) => Promise<PatientSaveOutcome>;
   onSendToTriage: (patient: Patient) => void;
   onNavigateToShaOtp?: (patient: Patient) => void;
   hospitalConfig?: HospitalConfig;
   onOpenWalkIn?: (patient: Patient) => void;
+  can?: (rights: string | string[]) => boolean;
+  onSetPatientStatus?: (patient: Patient, status: 'Active' | 'Inactive') => Promise<Patient | boolean>;
+  onPatientsChanged?: () => void;
 }
+
+const normalizePatient = (raw: any): Patient =>
+  ({
+    ...raw,
+    id: String(raw?.id ?? raw?.patientNumber ?? raw?.patient_code ?? ''),
+    name: String(raw?.name ?? raw?.fullName ?? raw?.full_name ?? ''),
+    age: raw?.dob ? calculateAgeFromDob(String(raw.dob)) : Number(raw?.age ?? 0),
+    dob: String(raw?.dob ?? ''),
+    gender: raw?.gender === 'Female' || raw?.gender === 'Other' ? raw.gender : 'Male',
+    phone: String(raw?.phone ?? ''),
+    email: String(raw?.email ?? ''),
+    nationalId: String(raw?.nationalId ?? raw?.national_id ?? ''),
+    birthCertificateNo: String(raw?.birthCertificateNo ?? raw?.birth_certificate_no ?? ''),
+    address: String(raw?.address ?? ''),
+    emergencyContact: String(raw?.emergencyContact ?? raw?.emergency_contact ?? ''),
+    emergencyPhone: String(raw?.emergencyPhone ?? raw?.emergency_phone ?? ''),
+    kinRelationship: String(raw?.kinRelationship ?? raw?.kin_relationship ?? ''),
+    bloodGroup: raw?.bloodGroup ?? raw?.blood_group ?? '',
+    allergies: String(raw?.allergies ?? ''),
+    insuranceProvider: String(raw?.insuranceProvider ?? raw?.insurance_provider ?? 'Cash / M-Pesa'),
+    insuranceScheme: String(raw?.insuranceScheme ?? raw?.insurance_scheme ?? ''),
+    insurancePolicyNo: String(raw?.insurancePolicyNo ?? raw?.insurance_policy_no ?? ''),
+    patientCategory: String(raw?.patientCategory ?? raw?.patient_category ?? ''),
+    patientSubCategory: String(raw?.patientSubCategory ?? raw?.patient_sub_category ?? ''),
+    patientCategoryId: raw?.patientCategoryId ?? raw?.patient_category_id ?? undefined,
+    patientSubCategoryId: raw?.patientSubCategoryId ?? raw?.patient_sub_category_id ?? undefined,
+    schemeId: raw?.schemeId ?? raw?.scheme_id ?? undefined,
+    status: raw?.status ?? 'Registered',
+    shaVerified: Boolean(raw?.shaVerified ?? raw?.sha_verified),
+    registeredDate: String(raw?.registeredDate ?? raw?.registered_date ?? ''),
+    visitId: raw?.visitId ?? raw?.visit_id ?? undefined,
+  }) as Patient;
 
 interface RegistryPerson {
   name: string;
@@ -187,12 +222,22 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
   onNavigateToShaOtp,
   hospitalConfig,
   onOpenWalkIn,
+  can,
+  onSetPatientStatus,
+  onPatientsChanged,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [insuranceFilter, setInsuranceFilter] = useState('All');
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  const [serverRows, setServerRows] = useState<Patient[] | null>(null);
+  const [serverMeta, setServerMeta] = useState<PatientPageMeta | null>(null);
+  const [listLoading, setListLoading] = useState(false);
+  const [listError, setListError] = useState('');
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [activity, setActivity] = useState<any[]>([]);
   const [showRegisterModal, setShowRegisterModal] = useState(false);
   const [editingPatient, setEditingPatient] = useState<Patient | null>(null);
   const [setupCategories, setSetupCategories] = useState<any[]>([]);
@@ -202,29 +247,14 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
   const [showIdCardModal, setShowIdCardModal] = useState<Patient | null>(null);
   const [registeredCashPatient, setRegisteredCashPatient] = useState<Patient | null>(null);
 
-  const safePatients = (Array.isArray(patients) ? patients : []).map((raw: any) => ({
-    ...raw,
-    id: String(raw?.id ?? raw?.patient_code ?? ''),
-    name: String(raw?.name ?? raw?.full_name ?? ''),
-    age: raw?.dob ? calculateAgeFromDob(String(raw.dob)) : Number(raw?.age ?? 0),
-    dob: String(raw?.dob ?? ''),
-    gender: raw?.gender === 'Female' || raw?.gender === 'Other' ? raw.gender : 'Male',
-    phone: String(raw?.phone ?? ''),
-    email: String(raw?.email ?? ''),
-    nationalId: String(raw?.nationalId ?? raw?.national_id ?? ''),
-    birthCertificateNo: String(raw?.birthCertificateNo ?? raw?.birth_certificate_no ?? ''),
-    address: String(raw?.address ?? ''),
-    emergencyContact: String(raw?.emergencyContact ?? raw?.emergency_contact ?? ''),
-    emergencyPhone: String(raw?.emergencyPhone ?? raw?.emergency_phone ?? ''),
-    kinRelationship: String(raw?.kinRelationship ?? raw?.kin_relationship ?? ''),
-    bloodGroup: raw?.bloodGroup ?? raw?.blood_group ?? '',
-    allergies: String(raw?.allergies ?? ''),
-    insuranceProvider: String(raw?.insuranceProvider ?? raw?.insurance_provider ?? 'Cash / M-Pesa'),
-    insuranceScheme: String(raw?.insuranceScheme ?? raw?.insurance_scheme ?? ''),
-    insurancePolicyNo: String(raw?.insurancePolicyNo ?? raw?.insurance_policy_no ?? ''),
-    status: raw?.status ?? 'Registered',
-    shaVerified: Boolean(raw?.shaVerified ?? raw?.sha_verified),
-  })) as Patient[];
+  const safePatients = (Array.isArray(patients) ? patients : []).map(normalizePatient);
+  const hasRight = (rights: string | string[]) => (can ? can(rights) : true);
+  const canCreate = hasRight(['patient.create', 'patient:create', 'patients:create']);
+  const canEdit = hasRight(['patient.update', 'patient:update', 'patients:edit']);
+  const canMerge = hasRight(['patient.merge', 'patient:merge']);
+  const canDeactivate = hasRight(['patient.deactivate', 'patient:deactivate', 'patients:edit']);
+  const canCreateVisit = hasRight(['visit.create', 'visit:create', 'patients:create']);
+  const canQueue = hasRight(['queue.view', 'queue.route', 'queue:view', 'queue:route', 'queue:manage', 'queue:tv']);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -266,6 +296,49 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
     void loadPatientSetup();
   }, []);
 
+  const insuranceCategoryId = (() => {
+    if (insuranceFilter === 'All') return undefined;
+    const pattern =
+      insuranceFilter === 'Cash'
+        ? /cash|m-?pesa/i
+        : insuranceFilter === 'NHIF/SHA'
+          ? /sha|shif|nhif/i
+          : /private/i;
+    const match = setupCategories.find((c) => pattern.test(String(c.name || c.code || '')));
+    return match?.id;
+  })();
+
+  React.useEffect(() => {
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      setListLoading(true);
+      try {
+        const result = await apiClient.getPatients({
+          search: searchTerm,
+          page,
+          perPage: pageSize,
+          patientCategoryId: insuranceCategoryId,
+        });
+        if (!active) return;
+        const rows = result.data.map(normalizePatient);
+        setServerRows(rows);
+        setServerMeta(result.meta);
+        setListError('');
+      } catch (error) {
+        if (!active) return;
+        setServerRows(null);
+        setServerMeta(null);
+        setListError((error as Error).message || 'The patient list could not be loaded.');
+      } finally {
+        if (active) setListLoading(false);
+      }
+    }, 250);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [searchTerm, page, pageSize, insuranceCategoryId, refreshKey]);
+
   const calculateAge = calculateAgeFromDob;
   const consulted = React.useMemo(() => new Set((consultations || []).map((c) => String(c.patientId))), [consultations]);
   const hasConsultation = (id: string) => !consultations || consulted.has(String(id));
@@ -299,24 +372,27 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
     : [];
   const schemeOptions = availableSchemes.length ? availableSchemes : fallbackScheme;
 
-  const filteredPatients = safePatients.filter((p) => {
-    const matchesSearch =
-      p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.phone.includes(searchTerm) ||
-      p.nationalId.includes(searchTerm);
+  const filteredPatients = serverRows
+    ? serverRows
+    : safePatients.filter((p) => {
+        const matchesSearch =
+          p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          p.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          p.phone.includes(searchTerm) ||
+          p.nationalId.includes(searchTerm);
 
-    const matchesInsurance =
-      insuranceFilter === 'All' ||
-      (insuranceFilter === 'Cash' && p.insuranceProvider.includes('Cash')) ||
-      (insuranceFilter === 'NHIF/SHA' && (p.insuranceProvider.includes('NHIF') || p.insuranceProvider.includes('SHA'))) ||
-      (insuranceFilter === 'Private' && !p.insuranceProvider.includes('Cash') && !p.insuranceProvider.includes('NHIF'));
+        const matchesInsurance =
+          insuranceFilter === 'All' ||
+          (insuranceFilter === 'Cash' && p.insuranceProvider.includes('Cash')) ||
+          (insuranceFilter === 'NHIF/SHA' && (p.insuranceProvider.includes('NHIF') || p.insuranceProvider.includes('SHA'))) ||
+          (insuranceFilter === 'Private' && !p.insuranceProvider.includes('Cash') && !p.insuranceProvider.includes('NHIF'));
 
-    return matchesSearch && matchesInsurance;
-  });
-  const pageCount = Math.max(1, Math.ceil(filteredPatients.length / pageSize));
-  const currentPage = Math.min(page, pageCount);
-  const pagePatients = filteredPatients.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+        return matchesSearch && matchesInsurance;
+      });
+  const totalPatients = serverMeta?.total ?? filteredPatients.length;
+  const pageCount = serverMeta?.lastPage ?? Math.max(1, Math.ceil(filteredPatients.length / pageSize));
+  const currentPage = serverMeta?.currentPage ?? Math.min(page, pageCount);
+  const pagePatients = serverRows ? serverRows : filteredPatients.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const pageNumbers = (() => {
     const set = new Set([1, pageCount, currentPage - 1, currentPage, currentPage + 1].filter((n) => n >= 1 && n <= pageCount));
@@ -330,8 +406,8 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
   })();
 
   const resetForm = () => {
-    setDupCleared('');
     setDuplicates([]);
+    setOverrideToken('');
     setFormData({
       name: '',
       age: 0,
@@ -412,22 +488,22 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
     return o as typeof formData;
   };
 
-  const phoneKey = (v: unknown) =>
-    String(v || '')
-      .replace(/\D/g, '')
-      .slice(-9);
-  const samePhone = (phone: string) => {
-    const k = phoneKey(phone);
-    return k.length === 9 ? safePatients.filter((p) => phoneKey(p.phone) === k && (!editingPatient || p.id !== editingPatient.id)) : [];
-  };
-  const [duplicates, setDuplicates] = useState<Patient[]>([]);
+  const [duplicates, setDuplicates] = useState<DuplicateMatch[]>([]);
+  const [overrideToken, setOverrideToken] = useState('');
+  const [saving, setSaving] = useState(false);
 
-  const [dupFrom, setDupFrom] = useState<'phone' | 'save'>('save');
-  const [dupCleared, setDupCleared] = useState('');
-  const phoneMatches = samePhone(formData.phone);
-  const updateExisting = (p: Patient) => {
+  const updateExisting = async (match: DuplicateMatch) => {
     const typed = inCaps(formData);
-    openEditPatient(p);
+    let patient = safePatients.find((p) => p.id === match.id);
+    if (!patient) {
+      try {
+        patient = normalizePatient(await apiClient.getPatient(match.id));
+      } catch {
+        window.alert('The duplicate patient could not be opened. Refresh the list and try again.');
+        return;
+      }
+    }
+    openEditPatient(patient);
     setFormData((cur) => {
       const o: any = { ...cur };
       Object.entries(typed).forEach(([k, v]) => {
@@ -436,37 +512,104 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
       return o;
     });
     setDuplicates([]);
+    setOverrideToken('');
   };
-  const handleFormSubmit = async (e: React.FormEvent, proceed = false) => {
+
+  const openPatientDetail = async (patient: Patient) => {
+    setSelectedPatient(patient);
+    setActivity([]);
+    setDetailsLoading(true);
+    try {
+      const [detail, activityRows] = await Promise.all([apiClient.getPatient(patient.id), apiClient.getPatientActivity(patient.id)]);
+      setSelectedPatient(normalizePatient(detail));
+      setActivity(Array.isArray(activityRows) ? activityRows : []);
+    } catch (error) {
+      setListError((error as Error).message || 'The patient details could not be loaded.');
+    } finally {
+      setDetailsLoading(false);
+    }
+  };
+
+  const changePatientStatus = async (patient: Patient, status: 'Active' | 'Inactive') => {
+    try {
+      const result = onSetPatientStatus
+        ? await onSetPatientStatus(patient, status)
+        : await apiClient.setPatientStatus(patient.id, status);
+      if (!result) return;
+      const updated = typeof result === 'object' ? normalizePatient(result) : { ...patient, status };
+      setSelectedPatient(updated);
+      setRefreshKey((value) => value + 1);
+      onPatientsChanged?.();
+    } catch (error) {
+      window.alert((error as Error).message || 'The patient status could not be changed.');
+    }
+  };
+
+  const openNewVisit = async (patient: Patient) => {
+    try {
+      await apiClient.createVisit(patient.id, { source: 'Registration' });
+      setRefreshKey((value) => value + 1);
+      onPatientsChanged?.();
+      await openPatientDetail(patient);
+    } catch (error) {
+      window.alert((error as Error).message || 'The visit could not be opened.');
+    }
+  };
+
+  const handleFormSubmit = async (e: React.FormEvent, override?: { token: string; reason?: string }) => {
     e.preventDefault();
     if (!formData.name.trim() || !formData.phone.trim()) {
       alert('Please provide the patient name and phone number.');
       return;
     }
-    if (!editingPatient && !proceed && dupCleared !== phoneKey(formData.phone)) {
-      const dup = samePhone(formData.phone);
-      if (dup.length) {
-        setDupFrom('save');
-        setDuplicates(dup);
-        return;
-      }
-    }
     setDuplicates([]);
+    setListError('');
+    setSaving(true);
     const data = inCaps(formData);
     const age = data.dob ? calculateAge(data.dob) : Math.max(0, Math.min(130, Number(data.age) || 0));
-    if (editingPatient) {
-      const saved = onUpdatePatient ? await onUpdatePatient({ ...editingPatient, ...data, age }) : false;
-      if (!saved) return;
-    } else {
-      const saved = await onAddPatient({ ...data, age });
-      if (!saved) return;
-      if (typeof saved === 'object') {
-        setRegisteredCashPatient(saved as Patient);
-        return;
+    try {
+      if (editingPatient) {
+        if (!onUpdatePatient) return;
+        const saved = await onUpdatePatient({ ...editingPatient, ...data, age, patientCategoryId: editingPatient.patientCategoryId });
+        if (!saved.success) {
+          window.alert(saved.error || 'The patient could not be updated.');
+          return;
+        }
+      } else {
+        const saved = await onAddPatient({
+          ...data,
+          age,
+          ...(override
+            ? {
+                duplicateOverrideToken: override.token,
+                duplicateOverrideReason: override.reason || 'Confirmed as a different patient by an authorized user.',
+                overrideConfirmed: true,
+              }
+            : {}),
+        });
+        if (!saved.success) {
+          if (saved.code === 'duplicate_patient' && saved.matches?.length) {
+            setDuplicates(saved.matches);
+            setOverrideToken(saved.overrideToken || '');
+            return;
+          }
+          window.alert(saved.error || 'The patient could not be registered.');
+          return;
+        }
+        if (saved.patient) {
+          setRegisteredCashPatient(normalizePatient(saved.patient));
+          setRefreshKey((value) => value + 1);
+          onPatientsChanged?.();
+          return;
+        }
       }
+      setShowRegisterModal(false);
+      resetForm();
+      setRefreshKey((value) => value + 1);
+      onPatientsChanged?.();
+    } finally {
+      setSaving(false);
     }
-    setShowRegisterModal(false);
-    resetForm();
   };
 
   return (
@@ -475,13 +618,15 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
         <div>
           <h2 className="text-xl font-bold text-gray-900 tracking-tight">Patient Registration & Directory</h2>
           <p className="text-xs text-gray-500">
-            Total registered patients: <span className="font-bold text-blue-600">{patients.length}</span>
+            Total registered patients: <span className="font-bold text-blue-600">{totalPatients.toLocaleString()}</span>
           </p>
         </div>
         <button
           id="btn-register-new-patient"
           onClick={openNewPatient}
-          className="inline-flex items-center justify-center space-x-2 px-4 py-2.5 bg-[#0b66b2] hover:bg-blue-700 text-white text-xs font-bold rounded-lg shadow-sm transition"
+          disabled={!canCreate}
+          title={canCreate ? 'Register a new patient' : 'You do not have permission to register patients'}
+          className="inline-flex items-center justify-center space-x-2 px-4 py-2.5 bg-[#0b66b2] hover:bg-blue-700 text-white text-xs font-bold rounded-lg shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <UserPlus className="w-4 h-4" />
           <span>Register New Patient</span>
@@ -524,7 +669,17 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
         </div>
       </div>
 
+      {listError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-xs font-semibold text-red-700">
+          {listError} Showing locally cached patients until the server is available.
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border border-gray-200/80 shadow-xs overflow-hidden">
+        <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2 text-[11px] text-gray-500">
+          <span>{listLoading ? 'Loading patients…' : 'Patient directory'}</span>
+          <span>{serverRows ? 'Server results' : 'Cached results'}</span>
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-gray-50 text-gray-600 font-semibold border-b border-gray-200 uppercase tracking-wider">
@@ -622,24 +777,26 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
                         )}
                         <button
                           id={`btn-edit-${p.id}`}
-                          title="Edit Patient"
+                          title={canEdit ? 'Edit Patient' : 'You do not have permission to edit patients'}
+                          disabled={!canEdit}
                           onClick={() => openEditPatient(p)}
-                          className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+                          className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg transition disabled:opacity-30 disabled:cursor-not-allowed"
                         >
                           <Edit2 className="w-4 h-4" />
                         </button>
                         <button
                           id={`btn-triage-${p.id}`}
-                          title="Send to Triage"
+                          title={canQueue ? 'Add to Queue' : 'You do not have queue access'}
+                          disabled={!canQueue}
                           onClick={() => onSendToTriage(p)}
-                          className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition"
+                          className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition disabled:opacity-30 disabled:cursor-not-allowed"
                         >
                           <HeartPulse className="w-4 h-4" />
                         </button>
                         <button
                           id={`btn-view-${p.id}`}
                           title="View Details"
-                          onClick={() => setSelectedPatient(p)}
+                          onClick={() => void openPatientDetail(p)}
                           className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition"
                         >
                           <Eye className="w-4 h-4" />
@@ -680,8 +837,8 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
           >
             <div className="flex flex-wrap items-center gap-3 text-gray-600">
               <span>
-                Showing <b>{(currentPage - 1) * pageSize + 1}</b>–<b>{Math.min(currentPage * pageSize, filteredPatients.length)}</b> of{' '}
-                <b>{filteredPatients.length.toLocaleString()}</b> patients
+                Showing <b>{serverMeta?.from ?? (totalPatients ? (currentPage - 1) * pageSize + 1 : 0)}</b>–
+                <b>{serverMeta?.to ?? Math.min(currentPage * pageSize, totalPatients)}</b> of <b>{totalPatients.toLocaleString()}</b> patients
               </span>
               <label className="flex items-center gap-1.5">
                 Rows per page
@@ -828,50 +985,59 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
             {duplicates.length > 0 && (
               <div className="fixed inset-0 z-[60] bg-black/40 flex items-center justify-center p-4">
                 <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-5 space-y-4 text-xs">
-                  <h4 className="font-bold text-gray-900 text-sm">This mobile number is already registered</h4>
+                  <h4 className="font-bold text-gray-900 text-sm">Possible duplicate patient found</h4>
                   <p className="text-gray-600">
-                    {formData.phone} belongs to the patient{duplicates.length > 1 ? 's' : ''} below. Update the existing record instead of
-                    registering the same person twice, or proceed if this is a different person.
+                    The server found {duplicates.length} existing patient{duplicates.length > 1 ? 's' : ''} matching this registration.
+                    Update an existing record instead of creating a duplicate, or confirm that this is a different person.
                   </p>
                   <div className="divide-y border border-gray-200 rounded-xl">
-                    {duplicates.map((p) => (
-                      <div key={p.id} className="p-3 flex flex-wrap items-center justify-between gap-2">
+                    {duplicates.map((match) => (
+                      <div key={match.id} className="p-3 flex flex-wrap items-center justify-between gap-2">
                         <div>
-                          <div className="font-bold uppercase text-gray-900">{p.name}</div>
+                          <div className="font-bold uppercase text-gray-900">{match.name}</div>
                           <div className="text-[11px] text-gray-500">
-                            {p.id} • ID: {p.nationalId || '—'} • {p.gender}
-                            {p.dob ? ` • DOB ${p.dob}` : ''} • {p.patientSubCategory || p.insuranceProvider || ''}
+                            {match.id} • ID: {match.nationalId || '—'} • {match.dob ? `DOB ${match.dob}` : 'DOB not recorded'}
                           </div>
+                          <div className="text-[11px] text-amber-700 font-semibold mt-1">{match.reasons.join(' · ') || 'Similar record'}</div>
+                          {match.lastVisit && <div className="text-[11px] text-gray-400">Last visit: {match.lastVisit}</div>}
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => updateExisting(p)}
-                          className="px-3 py-1.5 bg-[#0b66b2] hover:bg-blue-700 text-white rounded-lg font-bold"
-                        >
-                          Update this patient's details
-                        </button>
+                        {canEdit && (
+                          <button
+                            type="button"
+                            onClick={() => void updateExisting(match)}
+                            className="px-3 py-1.5 bg-[#0b66b2] hover:bg-blue-700 text-white rounded-lg font-bold"
+                          >
+                            Update this patient's details
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
-                  <div className="flex justify-end gap-2">
+                  <div className="flex flex-wrap justify-end items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => setDuplicates([])}
+                      onClick={() => {
+                        setDuplicates([]);
+                        setOverrideToken('');
+                      }}
                       className="px-4 py-2 border border-gray-300 rounded-lg font-bold text-gray-700"
                     >
                       Cancel
                     </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        setDupCleared(phoneKey(formData.phone));
-                        if (dupFrom === 'save') void handleFormSubmit(e as any, true);
-                        else setDuplicates([]);
-                      }}
-                      className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold"
-                    >
-                      Proceed — register as a new patient
-                    </button>
+                    {canMerge ? (
+                      <button
+                        type="button"
+                        disabled={!overrideToken || saving}
+                        onClick={(e) => void handleFormSubmit(e, { token: overrideToken })}
+                        className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        {saving ? 'Confirming…' : 'Proceed — register as a new patient'}
+                      </button>
+                    ) : (
+                      <span className="text-[11px] font-semibold text-red-700">
+                        Only a System Administrator can confirm that this is a different patient.
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -920,12 +1086,6 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
                     placeholder="07XX XXX XXX"
                     value={formData.phone}
                     onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                    onBlur={() => {
-                      if (!editingPatient && phoneMatches.length && dupCleared !== phoneKey(formData.phone)) {
-                        setDupFrom('phone');
-                        setDuplicates(phoneMatches);
-                      }
-                    }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   />
                 </div>
@@ -1215,7 +1375,8 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
                   <button
                     id="btn-submit-registration"
                     type="submit"
-                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg shadow-sm flex items-center space-x-2 transition cursor-pointer"
+                    disabled={saving || (editingPatient ? !canEdit : !canCreate)}
+                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg shadow-sm flex items-center space-x-2 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <ShieldCheck className="w-4 h-4 text-emerald-100" />
                     <span>Register & Proceed to SHA OTP Verification</span>
@@ -1225,7 +1386,8 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
                   <button
                     id="btn-submit-registration"
                     type="submit"
-                    className="px-5 py-2 bg-[#0b66b2] hover:bg-blue-700 text-white font-bold rounded-lg shadow-sm transition cursor-pointer"
+                    disabled={saving || (editingPatient ? !canEdit : !canCreate)}
+                    className="px-5 py-2 bg-[#0b66b2] hover:bg-blue-700 text-white font-bold rounded-lg shadow-sm transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {editingPatient ? 'Update Patient Details' : 'Save & Register Patient'}
                   </button>
@@ -1241,7 +1403,11 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-gray-100 space-y-4">
             <div className="flex items-center justify-between border-b pb-3">
               <div>
-                <span className="text-[10px] font-mono font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{selectedPatient.id}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{selectedPatient.id}</span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-gray-100 text-gray-700">{selectedPatient.status}</span>
+                  {detailsLoading && <span className="text-[10px] font-semibold text-blue-600">Refreshing…</span>}
+                </div>
                 <h3 className="text-lg font-bold text-gray-900 mt-1">{selectedPatient.name}</h3>
               </div>
               <button onClick={() => setSelectedPatient(null)} className="text-gray-400 hover:text-gray-600">
@@ -1280,13 +1446,66 @@ export const PatientsModule: React.FC<PatientsModuleProps> = ({
               </div>
             </div>
 
-            <div className="pt-2 flex items-center justify-end space-x-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+              <div className="rounded-lg border border-gray-200 p-2.5">
+                <p className="text-gray-400 text-[10px]">Active visit</p>
+                <p className="font-semibold text-gray-800">
+                  {selectedPatient.activeVisits?.length
+                    ? `${selectedPatient.activeVisits[0].visitNumber || selectedPatient.activeVisits[0].id} · ${selectedPatient.activeVisits[0].status || 'Open'}`
+                    : 'No active visit'}
+                </p>
+              </div>
+              <div className="rounded-lg border border-gray-200 p-2.5">
+                <p className="text-gray-400 text-[10px]">Queue status</p>
+                <p className="font-semibold text-gray-800">
+                  {selectedPatient.queueStatus
+                    ? `${selectedPatient.queueStatus.ticketNumber} · ${selectedPatient.queueStatus.currentStation || 'Waiting'}`
+                    : 'Not in queue'}
+                </p>
+              </div>
+            </div>
+
+            {(selectedPatient.recentVisits?.length || activity.length) > 0 && (
+              <div className="max-h-40 overflow-y-auto rounded-lg border border-gray-200 divide-y divide-gray-100 text-[11px]">
+                {selectedPatient.recentVisits?.slice(0, 5).map((visit: any, index: number) => (
+                  <div key={`visit-${visit.id || index}`} className="px-3 py-2 flex justify-between gap-2">
+                    <span className="font-semibold text-gray-700">Visit {visit.visit_number || visit.visitNumber || visit.id}</span>
+                    <span className="text-gray-500">{visit.visit_date || visit.visitDate || ''}</span>
+                  </div>
+                ))}
+                {activity.slice(0, 8).map((event: any, index: number) => (
+                  <div key={`activity-${event.id || index}`} className="px-3 py-2 flex justify-between gap-2">
+                    <span className="font-semibold text-gray-700">{event.action || event.event_type || event.eventType || 'Activity'}</span>
+                    <span className="text-gray-500">{event.created_at || event.createdAt || ''}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="pt-2 flex flex-wrap items-center justify-end gap-2">
+              {canDeactivate && (
+                <button
+                  onClick={() => void changePatientStatus(selectedPatient, selectedPatient.status === 'Inactive' ? 'Active' : 'Inactive')}
+                  className="px-3 py-2 border border-gray-300 text-gray-700 font-bold text-xs rounded-lg"
+                >
+                  {selectedPatient.status === 'Inactive' ? 'Reactivate' : 'Deactivate'}
+                </button>
+              )}
+              {canCreateVisit && !selectedPatient.activeVisits?.length && (
+                <button
+                  onClick={() => void openNewVisit(selectedPatient)}
+                  className="px-3 py-2 border border-blue-300 text-blue-700 font-bold text-xs rounded-lg"
+                >
+                  Open New Visit
+                </button>
+              )}
               <button
+                disabled={!canQueue}
                 onClick={() => {
                   onSendToTriage(selectedPatient);
                   setSelectedPatient(null);
                 }}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg flex items-center space-x-1"
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg flex items-center space-x-1 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <HeartPulse className="w-3.5 h-3.5" />
                 <span>Add to Queue</span>

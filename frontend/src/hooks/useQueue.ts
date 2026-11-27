@@ -8,18 +8,16 @@ const STAFF_FOR_STATION: Partial<Record<QueueStation, string>> = {
   Laboratory: 'Laboratory',
   Radiology: 'Radiology',
   Pharmacy: 'Pharmacy',
+  'Inpatient Ward': 'Inpatient Ward',
   Billing: 'Cashier',
 };
 
 const NEXT_STATION: Partial<Record<QueueStation, QueueStation>> = {
   Registration: 'Triage',
   Triage: 'Consultation',
-  Consultation: 'Pharmacy',
-  Laboratory: 'Consultation',
-  Radiology: 'Consultation',
-  Pharmacy: 'Billing',
-  Billing: 'Discharged',
 };
+
+export type EnqueueResult = { success: true; destination: string } | { success: false; error: string };
 
 export const isWithin24Hours = (raw: string) => {
   if (!raw) return false;
@@ -29,37 +27,67 @@ export const isWithin24Hours = (raw: string) => {
 
 const isCash = (method: string) => {
   const lower = method.toLowerCase();
-  return lower.includes('cash') || lower.includes('m-pesa');
+  return lower.includes('cash') || lower.includes('m-pesa') || lower.includes('mpesa');
 };
 
-export const toQueueItem = (row: Record<string, any>): QueueItem => ({
-  id: String(row.id),
-  ticketNumber: String(row.ticket_number || ''),
-  patientId: String(row.patient_id || ''),
-  patientName: String(row.patient_name || ''),
-  arrivedTime: String(row.arrived_time || row.created_at || ''),
-  currentStation: (row.current_station || 'Triage') as QueueStation,
-  priority: (row.priority || 'Normal') as TriageCategory,
-  assignedTo: row.assigned_to || undefined,
-  paymentMethod: row.payment_method || undefined,
-  consultationFeePaid: Number(row.consultation_fee_paid) === 1,
-  status: row.status || 'Waiting',
-  callCount: Number(row.call_count || 0),
-  lastCalledAt: row.last_called_at || undefined,
-  servicePointNote: row.service_point_note || undefined,
-  consultationServiceId: row.consultation_service_id ? Number(row.consultation_service_id) : undefined,
-  consultationServiceCode: row.consultation_service_code || undefined,
-  consultationType: row.consultation_type || undefined,
-  consultationFee: row.consultation_fee !== null && row.consultation_fee !== undefined ? Number(row.consultation_fee) : undefined,
-  patientSubCategory: row.patient_sub_category || undefined,
-});
+export const getNextQueueStation = (
+  station: QueueStation,
+  item?: Pick<QueueItem, 'priority' | 'paymentMethod' | 'consultationFeePaid'>,
+): QueueStation | null => {
+  if (
+    station === 'Triage' &&
+    item?.priority !== 'Emergency' &&
+    item?.consultationFeePaid === false &&
+    isCash(String(item.paymentMethod || ''))
+  ) {
+    return 'Billing';
+  }
+  return NEXT_STATION[station] ?? null;
+};
+
+export const toQueueItem = (row: Record<string, any>): QueueItem => {
+  const value = (...keys: string[]) => {
+    for (const key of keys) {
+      if (row[key] !== undefined && row[key] !== null && row[key] !== '') return row[key];
+    }
+    return undefined;
+  };
+  return {
+    id: String(value('id') || ''),
+    ticketNumber: String(value('ticketNumber', 'ticket_number') || ''),
+    patientId: String(value('patientId', 'patient_id') || ''),
+    patientName: String(value('patientName', 'patient_name') || ''),
+    arrivedTime: String(value('arrivedTime', 'arrived_time', 'createdAt', 'created_at') || ''),
+    currentStation: (value('currentStation', 'current_station') || 'Triage') as QueueStation,
+    priority: (value('priority') || 'Normal') as TriageCategory,
+    assignedTo: value('assignedTo', 'assigned_to') || undefined,
+    paymentMethod: value('paymentMethod', 'payment_method') || undefined,
+    consultationFeePaid: Number(value('consultationFeePaid', 'consultation_fee_paid')) === 1,
+    status: (value('status') || 'Waiting') as QueueItem['status'],
+    callCount: Number(value('callCount', 'call_count') || 0),
+    lastCalledAt: value('lastCalledAt', 'last_called_at') || undefined,
+    servicePointNote: value('servicePointNote', 'service_point_note') || undefined,
+    consultationServiceId: value('consultationServiceId', 'consultation_service_id')
+      ? Number(value('consultationServiceId', 'consultation_service_id'))
+      : undefined,
+    consultationServiceCode: value('consultationServiceCode', 'consultation_service_code') || undefined,
+    consultationType: value('consultationType', 'consultation_type') || undefined,
+    consultationFee:
+      value('consultationFee', 'consultation_fee') !== undefined ? Number(value('consultationFee', 'consultation_fee')) : undefined,
+    patientCategory: value('patientCategory', 'patient_category') || undefined,
+    patientSubCategory: value('patientSubCategory', 'patient_sub_category') || undefined,
+    consultationPriceSource: value('consultationPriceSource', 'consultation_price_source') || undefined,
+    freeConsultation: Boolean(value('freeConsultation', 'free_consultation')),
+    freeConsultationAllowedBy: value('freeConsultationAllowedBy', 'free_consultation_allowed_by') || undefined,
+  };
+};
 
 export function useQueue(staffName: string) {
   const [queue, setQueue] = useState<QueueItem[]>([]);
 
   const load = useCallback(async () => {
     const rows = await apiClient.getEntity('queue');
-    setQueue(rows.map(toQueueItem).filter((item) => isWithin24Hours(item.arrivedTime)));
+    setQueue(rows.map(toQueueItem));
   }, []);
 
   const save = useCallback((item: QueueItem) => {
@@ -104,6 +132,20 @@ export function useQueue(staffName: string) {
     [update],
   );
 
+  const route = useCallback(
+    async (id: string, station: QueueStation) => {
+      try {
+        const result = await apiClient.routeQueueEntry(id, station);
+        setQueue((current) => current.map((q) => (q.id === id ? { ...moveTo(q, station), ...toQueueItem(result) } : q)));
+        return true;
+      } catch (error) {
+        window.alert((error as Error).message || 'The queue route could not be saved.');
+        return false;
+      }
+    },
+    [],
+  );
+
   const moveStation = useCallback(
     (id: string, station: QueueStation, patients: Patient[]) => {
       const target = queue.find((q) => q.id === id);
@@ -112,9 +154,9 @@ export function useQueue(staffName: string) {
         window.alert('Select the consultation type and complete Cashier payment before moving this cash patient from Billing.');
         return;
       }
-      save(moveTo(target, station));
+      void route(id, station);
     },
-    [queue, save],
+    [queue, route],
   );
 
   const completeAndNext = useCallback(
@@ -125,56 +167,88 @@ export function useQueue(staffName: string) {
         window.alert('Select the consultation type and complete Cashier payment before moving this cash patient from Billing.');
         return;
       }
-      save(moveTo(target, station || NEXT_STATION[target.currentStation] || 'Discharged'));
+      const nextStation = station || getNextQueueStation(target.currentStation, target);
+      if (nextStation) void route(id, nextStation);
     },
-    [queue, save],
+    [queue, route],
   );
+
+  const recordConsultationPayment = useCallback(
+    async (
+      id: string,
+      payment: { paymentMethod: 'Cash' | 'M-Pesa' | 'Card' | 'Bank Transfer'; reference?: string },
+    ) => {
+      const result = await apiClient.recordQueueConsultationPayment(id, payment);
+      setQueue((current) => current.map((item) => (item.id === id ? toQueueItem(result.data) : item)));
+      return result;
+    },
+    [],
+  );
+
+  const continueAfterPayment = useCallback(async (id: string) => {
+    const result = await apiClient.continueQueueAfterPayment(id);
+    setQueue((current) => current.map((item) => (item.id === id ? toQueueItem(result.data) : item)));
+    return result;
+  }, []);
 
   const setPriority = useCallback((id: string, priority: TriageCategory) => update(id, (q) => ({ ...q, priority })), [update]);
 
   const enqueue = useCallback(
-    (patient: Patient, service: any, fee: number, patientSubCategory: string): boolean => {
-      if (!service) return false;
+    async (patient: Patient, service: any, fee: number, patientSubCategory: string): Promise<EnqueueResult> => {
+      if (!service) return { success: false, error: 'Select a consultation service first.' };
       if (queue.some((q) => q.patientId === patient.id && q.currentStation !== 'Discharged' && isWithin24Hours(q.arrivedTime))) {
-        window.alert(`${patient.name} is already in the active patient queue.`);
-        return false;
+        return { success: false, error: `${patient.name} is already in the active patient queue.` };
       }
       const method = String(patient.insuranceProvider || '').trim();
       const free = Number(fee) <= 0;
       const cash = isCash(method) && !free;
-      const number = queue.length + 1;
       const note = free
         ? `Free consultation: ${service.name}, queued by ${staffName || 'staff'}. Proceed to Triage.`
         : cash
-          ? `Cash patient: ${service.name} selected at KSh ${Number(fee).toLocaleString()}. Payment required at Billing before Triage.`
+          ? `Cash patient: ${service.name} selected at KSh ${Number(fee).toLocaleString()}. Triage first; payment is due at Billing afterward.`
           : `${service.name} selected for ${patientSubCategory || 'patient sub-category'}. Proceed to Triage.`;
-      save({
-        id: `Q-${Date.now()}-${number}`,
-        ticketNumber: cash ? `B-${500 + number}` : `T-${100 + number}`,
-        patientId: patient.id,
-        patientName: patient.name,
-        arrivedTime: new Date().toISOString(),
-        currentStation: cash ? 'Billing' : 'Triage',
-        priority: 'Normal',
-        assignedTo: cash ? 'Cashier' : 'Triage Nurse',
-        paymentMethod: method,
-        consultationFeePaid: !cash,
-        status: 'Waiting',
-        callCount: 0,
-        consultationServiceId: Number(service.id),
-        consultationServiceCode: service.code,
-        consultationType: service.name,
-        consultationFee: Number(fee),
-        patientCategory: patient.patientCategory,
-        patientSubCategory,
-        consultationPriceSource: 'setup_consultation_prices',
-        ...(free ? { freeConsultation: true, freeConsultationAllowedBy: staffName } : {}),
-        servicePointNote: note,
-      });
-      return true;
+      try {
+        let visitId = patient.visitId ? String(patient.visitId) : '';
+        if (!visitId) {
+          const visit = await apiClient.createVisit(patient.id, { source: 'Registration' });
+          visitId = String(visit?.id || '');
+        }
+        if (!visitId) return { success: false, error: 'No visit was found for this patient.' };
+        const result = await apiClient.createQueueEntry({
+          patientId: patient.id,
+          visitId,
+          consultationServiceId: Number(service.id),
+          consultationServiceCode: service.code,
+          consultationServiceName: service.name,
+          consultationType: service.name,
+          consultationFee: Number(fee),
+          consultationFeePaid: !cash,
+          paymentMethod: method,
+          patientSubCategory,
+          patientCategory: patient.patientCategory,
+          ...(patient.schemeId ? { schemeId: Number(patient.schemeId) } : {}),
+          ...(free ? { freeConsultation: true } : {}),
+          servicePointNote: note,
+        });
+        setQueue((current) => [toQueueItem(result.data), ...current]);
+        return { success: true, destination: result.destination };
+      } catch (error) {
+        return { success: false, error: (error as Error).message || 'The patient could not be added to the queue.' };
+      }
     },
-    [queue, save, staffName],
+    [queue, staffName],
   );
 
-  return { queue, load, call, moveStation, completeAndNext, setPriority, enqueue };
+  return {
+    queue,
+    load,
+    call,
+    route,
+    moveStation,
+    completeAndNext,
+    recordConsultationPayment,
+    continueAfterPayment,
+    setPriority,
+    enqueue,
+  };
 }

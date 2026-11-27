@@ -41,7 +41,7 @@ import {
   Printer,
   Smile,
 } from 'lucide-react';
-import { ModuleType } from '../types';
+import { LaboratoryPage, ModuleType } from '../types';
 import { IPD_LINKS, IpdView } from './inpatient/ipdViews';
 import { FINANCE_LINKS, SHA_LINKS, STORES_LINKS, SuiteLink, SuiteModule, openSuiteTab, useShownSuiteTab } from './erp/suiteNav';
 
@@ -88,6 +88,8 @@ interface SidebarProps {
   activeModule: ModuleType;
   setActiveModule: (module: ModuleType) => void;
   pendingLabCount: number;
+  laboratoryPage: LaboratoryPage;
+  onSelectLaboratoryPage: (page: LaboratoryPage) => void;
   queueCount: number;
   inpatientCount?: number;
 
@@ -109,6 +111,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeModule,
   setActiveModule,
   pendingLabCount,
+  laboratoryPage,
+  onSelectLaboratoryPage,
   queueCount,
   inpatientCount = 0,
   mobileOpen = false,
@@ -131,6 +135,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   useEffect(() => {
     if (ipdActive) setIpdOpen(true);
   }, [ipdActive]);
+  const laboratoryActive = activeModule === 'laboratory';
+  const [laboratoryOpen, setLaboratoryOpen] = useState(laboratoryActive);
+  useEffect(() => {
+    if (laboratoryActive) setLaboratoryOpen(true);
+  }, [laboratoryActive]);
   const chooseIpd = (v: IpdView) => {
     onSelectIpdView?.(v);
     onCloseMobile?.();
@@ -288,6 +297,50 @@ export const Sidebar: React.FC<SidebarProps> = ({
             const isActive = activeModule === item.id;
             if (item.id === 'finance' || item.id === 'procurement_stores' || item.id === 'sha_claims')
               return renderSuite(item.id, item.label, Icon);
+            if (item.id === 'laboratory')
+              return (
+                <div key={item.id}>
+                  <button
+                    id="nav-laboratory"
+                    type="button"
+                    onClick={() => setLaboratoryOpen((open) => !open)}
+                    aria-expanded={laboratoryOpen}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-xs font-semibold transition-all cursor-pointer ${
+                      isActive ? 'bg-[#272727] text-white' : 'text-blue-100 hover:bg-white/10 hover:text-white'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <Icon className="w-4 h-4 flex-shrink-0" />
+                      <span className="truncate">{item.label}</span>
+                      {item.badge !== undefined && <span className="rounded-full bg-amber-400 px-1.5 py-0.5 text-[9px] font-bold text-gray-900">{item.badge}</span>}
+                    </span>
+                    <ChevronDown className={`w-3.5 h-3.5 flex-shrink-0 transition-transform ${laboratoryOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {laboratoryOpen && (
+                    <div className="ml-5 space-y-0.5 border-l border-white/10 py-1 pl-2">
+                      {(['Visits', 'Orders', 'Specimen', 'Results'] as LaboratoryPage[]).map((page) => (
+                        <button
+                          key={page}
+                          id={`nav-laboratory-${page.toLowerCase()}`}
+                          type="button"
+                          aria-current={laboratoryActive && laboratoryPage === page ? 'page' : undefined}
+                          onClick={() => {
+                            onSelectLaboratoryPage(page);
+                            onCloseMobile?.();
+                          }}
+                          className={`w-full rounded-lg px-2.5 py-2 text-left text-xs transition-colors ${
+                            laboratoryActive && laboratoryPage === page
+                              ? 'bg-[#272727] font-semibold text-white'
+                              : 'text-blue-100 hover:bg-white/10 hover:text-white'
+                          }`}
+                        >
+                          {page}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
             if (item.id === 'inpatient')
               return (
                 <div key={item.id}>
