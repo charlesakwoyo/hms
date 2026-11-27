@@ -44,6 +44,22 @@ class RecordService
     {
         $config = $this->config($resource);
         $table = $config['table'];
+        if ($resource === 'queue') {
+            $queueId = (string) ($data['id'] ?? '');
+            if ($queueId === '' || ! DB::table($table)->where('id', $queueId)->exists()) {
+                throw new InvalidArgumentException('Queue entries must be created or routed through the queue workflow.');
+            }
+
+            $queueFields = [
+                'id', 'priority', 'callCount', 'lastCalledAt', 'consultationServiceId',
+                'consultationServiceCode', 'consultationType', 'consultationFee',
+                'patientSubCategory', 'servicePointNote',
+            ];
+            $protected = array_diff(array_keys($data), $queueFields);
+            if ($protected !== []) {
+                throw new InvalidArgumentException('Queue status, payment, and routing must use the dedicated queue actions.');
+            }
+        }
         $columns = $this->columns($table);
         $row = $this->toRow($data, $config['aliases'] ?? [], $columns);
 
@@ -88,6 +104,9 @@ class RecordService
     public function delete(string $resource, string $id): void
     {
         $config = $this->config($resource);
+        if ($resource === 'queue') {
+            throw new InvalidArgumentException('Queue entries cannot be deleted; route them through the queue workflow.');
+        }
         DB::transaction(function () use ($resource, $config, $id) {
             if (isset($config['prices'])) {
                 DB::table($config['prices']['table'])->where($config['prices']['foreign_key'], $id)->delete();

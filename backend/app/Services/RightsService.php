@@ -24,6 +24,14 @@ class RightsService
         return count(array_intersect($rights, $this->rightsOf($user))) > 0;
     }
 
+    public function can(User $user, string $permission): bool
+    {
+        $rights = config('patients.rights', []);
+        $needed = is_array($rights) ? ($rights[$permission] ?? [$permission]) : [$permission];
+
+        return $this->has($user, is_array($needed) ? $needed : [$permission]);
+    }
+
     public function canWrite(User $user, string $resource): bool
     {
         $needed = config("records.resources.$resource.write");

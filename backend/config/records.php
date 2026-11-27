@@ -190,6 +190,7 @@ return [
                 'consultationFee' => 'consultation_fee', 'patientSubCategory' => 'patient_sub_category',
             ],
             'patient_record' => true,
+            'write' => ['queue:route', 'queue:manage'],
         ],
 
         'security-roles' => [

@@ -573,6 +573,29 @@ CREATE TABLE `consultations` (
   CONSTRAINT `fk_consultations_visit` FOREIGN KEY (`visit_id`) REFERENCES `patient_visits` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `consultation_dispositions`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `consultation_dispositions` (
+  `id` varchar(80) NOT NULL,
+  `queue_id` varchar(50) NOT NULL,
+  `patient_id` varchar(50) NOT NULL,
+  `visit_id` varchar(50) NOT NULL,
+  `outcome` varchar(30) NOT NULL,
+  `reason` text DEFAULT NULL,
+  `urgency` varchar(30) DEFAULT NULL,
+  `instructions` text DEFAULT NULL,
+  `status` varchar(30) NOT NULL,
+  `decided_by` varchar(180) DEFAULT NULL,
+  `decided_at` datetime NOT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_consultation_dispositions_visit` (`visit_id`),
+  KEY `idx_consultation_dispositions_patient` (`patient_id`,`status`),
+  KEY `idx_consultation_dispositions_queue` (`queue_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `dental_consultations`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
@@ -1458,15 +1481,26 @@ CREATE TABLE `lab_orders` (
   `test_name` varchar(180) DEFAULT NULL,
   `category` varchar(80) DEFAULT NULL,
   `sample_type` varchar(100) DEFAULT NULL,
+  `clinical_indication` text DEFAULT NULL,
   `requested_by` varchar(180) DEFAULT NULL,
   `requested_at` datetime DEFAULT NULL,
   `cost` decimal(12,2) DEFAULT 0.00,
   `status` varchar(50) DEFAULT 'Pending',
+  `specimen_accession_no` varchar(80) DEFAULT NULL,
+  `collected_by` varchar(180) DEFAULT NULL,
+  `received_by` varchar(180) DEFAULT NULL,
+  `rejected_by` varchar(180) DEFAULT NULL,
+  `rejected_at` datetime DEFAULT NULL,
+  `rejection_reason` text DEFAULT NULL,
+  `recollection_count` int(10) unsigned NOT NULL DEFAULT 0,
   `result_value` text DEFAULT NULL,
   `reference_range` varchar(180) DEFAULT NULL,
   `result_notes` text DEFAULT NULL,
   `conducted_by` varchar(180) DEFAULT NULL,
   `completed_at` datetime DEFAULT NULL,
+  `result_entered_by` varchar(180) DEFAULT NULL,
+  `verified_by` varchar(180) DEFAULT NULL,
+  `verified_at` datetime DEFAULT NULL,
   `setup_lab_test_id` bigint(20) DEFAULT NULL,
   `result_parameters_json` longtext DEFAULT NULL,
   `billing_status` varchar(30) NOT NULL DEFAULT 'Unpaid',
@@ -2001,7 +2035,9 @@ CREATE TABLE `patient_visits` (
   `visit_date` date NOT NULL,
   `visit_time` time DEFAULT NULL,
   `encounter_type` varchar(40) NOT NULL DEFAULT 'Outpatient',
+  `visit_type` varchar(40) DEFAULT NULL,
   `department_id` bigint(20) DEFAULT NULL,
+  `practitioner_id` varchar(50) DEFAULT NULL,
   `patient_category_id` bigint(20) DEFAULT NULL,
   `patient_sub_category_id` bigint(20) DEFAULT NULL,
   `scheme_id` bigint(20) unsigned DEFAULT NULL,
@@ -2010,6 +2046,7 @@ CREATE TABLE `patient_visits` (
   `source` varchar(60) DEFAULT 'Registration',
   `opened_by` varchar(50) DEFAULT NULL,
   `closed_at` datetime DEFAULT NULL,
+  `closed_by` varchar(50) DEFAULT NULL,
   `notes` text DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
@@ -3670,6 +3707,7 @@ CREATE TABLE `vitals_triage` (
   `bmi` decimal(8,2) DEFAULT NULL,
   `bmi_category` varchar(30) DEFAULT NULL,
   `triage_category` varchar(30) DEFAULT NULL,
+  `presenting_complaint` text DEFAULT NULL,
   `nurse_notes` text DEFAULT NULL,
   `recorded_by` varchar(180) DEFAULT NULL,
   `recorded_at` datetime DEFAULT NULL,
@@ -3814,5 +3852,3 @@ CREATE TABLE `workflow_events` (
 /*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;
 /*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
-
-
