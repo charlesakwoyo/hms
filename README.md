@@ -44,7 +44,7 @@ Phase 1 (about 30% of WiseCare):
 | Laboratory: specimen receipt, results, verification, return to Consultation | Built |
 | Inpatient handoff: admission request worklist, accept/decline, bed assignment, inpatient census, and discharge | Built |
 | System Setup: patient categories, sub-categories, schemes, departments, consultation services, lab tests, radiology, nursing procedures, pharmacy drugs, ICD-11, wards, beds, inpatient packages, SHA rebates, cancer registers, hospital profile | Built |
-| Remaining inpatient functions (rounds, medication administration, nursing orders, inpatient billing, and specialist records) | Later phase |
+| Remaining inpatient functions (medication administration, nursing orders, inpatient billing, and specialist records) | Later phase |
 | Other modules (Billing, Pharmacy, Radiology, SHA e-Claims, Theatre, Oncology, Dental, Maternity, Stores, Finance, Reports) | Later phase |
 
 ---
