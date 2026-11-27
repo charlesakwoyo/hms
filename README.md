@@ -39,8 +39,13 @@ Phase 1 (about 30% of WiseCare):
 | Dashboard | Built (patients and queue figures; bills, lab and wards arrive with their modules) |
 | Patients: register, search, edit, child guardian rule, P-numbers, visit opening | Built |
 | Queue & Encounters: queue a patient with a consultation, call, move station, priority, complete & next | Built |
+| Triage: assessment, vitals, and routing | Built |
+| Consultation: SOAP notes, diagnoses, laboratory orders, admission requests, and outpatient discharge | Built |
+| Laboratory: specimen receipt, results, verification, return to Consultation | Built |
+| Inpatient handoff: admission request worklist, accept/decline, bed assignment, inpatient census, and discharge | Built |
 | System Setup: patient categories, sub-categories, schemes, departments, consultation services, lab tests, radiology, nursing procedures, pharmacy drugs, ICD-11, wards, beds, inpatient packages, SHA rebates, cancer registers, hospital profile | Built |
-| Every other module (Triage, Consultation, Billing, Laboratory, Pharmacy, Radiology, Inpatient, SHA e-Claims, Theatre, Oncology, Dental, Maternity, Stores, Finance, Reports) | Shows "Coming in a later phase" |
+| Remaining inpatient functions (rounds, medication administration, nursing orders, inpatient billing, and specialist records) | Later phase |
+| Other modules (Billing, Pharmacy, Radiology, SHA e-Claims, Theatre, Oncology, Dental, Maternity, Stores, Finance, Reports) | Later phase |
 
 ---
 
@@ -387,12 +392,52 @@ Every change is saved at once with `POST /api/records/queue` (same id = update).
 > The cash consultation **invoice** is created by the Billing module, which arrives in Phase 2. Until then cash patients wait at
 > the Billing station with their consultation and fee recorded.
 
+### 11.4 Consultation and Laboratory
+
+1. In Consultation, open **Orders**, search the configured laboratory catalogue, select one or more tests, and record the clinical
+   indication. **Place Orders & Send to Laboratory** creates the orders and routes the visit to the Laboratory worklist.
+2. In **Laboratory → Visits** or **Orders**, staff can review the visit and its ordered tests. **Specimen** lists tests awaiting
+   collection or recollection. Receive the specimen and enter the accession number, or reject it with a reason to request
+   recollection.
+3. In **Laboratory → Results**, staff enter the result, reference range, and notes. The result remains pending until authorized
+   laboratory staff verify it.
+4. A verified result is visible in Consultation under **Lab Results**. When all orders for the visit are verified or cancelled, the
+   visit is routed back to the Consultation worklist. If more tests remain outstanding, the visit stays at Laboratory.
+5. Before outpatient discharge, the clinician must save the SOAP plan, provide discharge instructions, and resolve or cancel all
+   outstanding laboratory orders. The application blocks discharge if these conditions are not met.
+
+The laboratory workflow is served by `LaboratoryController`; specimen collection requires `lab:collect`, result entry requires
+`lab:results`, and verification requires `lab:approve`.
+
+### 11.5 Consultation to Inpatient handoff
+
+1. In Consultation, the clinician records the reason and urgency and submits **Request Admission**. This creates a pending
+   disposition; it does not yet admit the patient or reserve a bed.
+2. In **Inpatient (IPD) → Bookings & Status** or **Admission Form**, the admissions team reviews pending requests. Emergency and
+   urgent requests are listed first.
+3. Staff select an available bed from System Setup's ward/bed register and confirm the admission, or decline the request with a
+   documented reason. The backend checks the bed again during confirmation to prevent assigning the same bed twice.
+4. Confirmation creates an `admissions` record, marks the patient as admitted, changes the visit to inpatient, and routes the queue
+   to **Inpatient Ward**. Active patients appear in **Admitted Patients List**.
+5. When inpatient care is complete, staff record a discharge summary in **Discharge Request** or **Admitted Patients List** and
+   confirm discharge. A successful discharge marks the admission `Discharged`, stores the summary, returns the bed to `Available`,
+   clears the patient's current bed and ward, completes the queue entry, and closes the visit. The patient no longer appears in
+   the active inpatient list.
+
+The workflow requires the relevant `inpatient:bookings`, `inpatient:admit`, `inpatient:view`, and `inpatient:discharge` rights.
+The active inpatient chart is available through **Admission Clinical Notes**, **Doctor Notes & ICD-11**, **Ward Rounds**, and
+**Patient Vitals Log**. Admission notes can be saved as a draft and signed; signed notes are read-only. Doctor progress notes,
+ward-round assessments, and timestamped vitals are stored against the active admission, with chart history displayed alongside
+the entry forms. These screens require their corresponding `inpatient:admission-notes`, `inpatient:doctor-notes`,
+`inpatient:rounds`, or `inpatient:vitals` rights. Medication administration, inpatient orders, and inpatient billing remain
+unimplemented.
+
 ---
 
 ## 12. Flow: Dashboard
 
 **Screen:** `components/Dashboard.tsx`. It shows today's patients and queue figures from the data `App.tsx` already loaded
-(patients, queue). Bills, laboratory, wards and stock figures fill in as those modules are added.
+(patients, queue). Billing, laboratory, inpatient census, and stock figures are not currently wired into the dashboard.
 
 ---
 
@@ -411,6 +456,18 @@ needs the `X-XSRF-TOKEN` header (`apiClient` adds it).
 | GET | `/patients/{id}` | | `{ data: Patient }` |
 | POST | `/patients` | Patient (camelCase) | `{ id, visitId, data }` |
 | PUT | `/patients/{id}` | Patient (camelCase) | `{ id, data }` |
+| GET | `/consultation/worklist` | | `{ data: ConsultationWorklistEntry[] }` |
+| GET | `/laboratory/worklist` | | `{ data: LaboratoryOrder[] }` |
+| POST | `/laboratory/orders/{order}/collect` | `{ accessionNo? }` | `{ data: { status, accessionNo } }` |
+| POST | `/laboratory/orders/{order}/reject-specimen` | `{ reason }` | `{ data: { status } }` |
+| PUT | `/laboratory/orders/{order}/result` | `{ resultValue, referenceRange?, notes? }` | `{ data: { status } }` |
+| POST | `/laboratory/orders/{order}/verify` | | `{ data: { status, destination, returnedToConsultation } }` |
+| GET | `/inpatient/admission-requests` | | `{ data: AdmissionRequest[] }` |
+| GET | `/inpatient/available-beds` | | `{ data: AvailableBed[] }` |
+| POST | `/inpatient/admission-requests/{disposition}/accept` | `{ bedId }` | `{ data: { id, status, wardName, bedNumber } }` |
+| POST | `/inpatient/admission-requests/{disposition}/decline` | `{ reason }` | `{ data: { id, status } }` |
+| GET | `/inpatient/admissions` | | `{ data: ActiveAdmission[] }` |
+| POST | `/inpatient/admissions/{admission}/discharge` | `{ summary }` | `{ data: { id, status, visitId } }` |
 | GET | `/catalog/consultations` | | `{ data: ConsultationService[] }` with `subCategoryPriceRows` |
 | GET | `/branches` | | `{ currentBranchId, data }` |
 | GET | `/records/{resource}` | | `{ data: rows[] }` (snake_case) |
@@ -469,6 +526,7 @@ Error answers: `{ "success": false, "error": "…" }` with 400 (bad input), 401 
 | Every call returns 401 | Session cookie not sent: same-origin issue (see above) or `SESSION_DOMAIN` set wrongly |
 | A save says "Your role cannot change these records" | The resource's `write` list in `config/records.php` and the role's `security_roles.rights_json` |
 | A field is not saved | Its column name: is it the snake_case of the field, or does it need an `aliases` entry? |
+| An available bed is missing from the admission form | Ensure its status is `Available` and its ward exists in Ward Setup; beds saved with a ward name only are matched by exact ward name. |
 | Prices do not show per sub-category | The price table rows and `setup_patient_subcategories.sub_category_code` |
 | Server error (500) | `backend/storage/logs/laravel.log` |
 | Browser side | DevTools → Network: every API call is `/api/...`; the answer's `error` is the message shown |
@@ -488,8 +546,8 @@ php artisan tinker
 | Phase | Modules |
 |---|---|
 | 1 (done) | Foundation, sign-in, roles, layout, Dashboard, Patients, Queue & Encounters, System Setup |
-| 2 | Vitals & Triage, Consultation, Billing & Cashier (invoices, payments, the cash consultation invoice) |
-| 3 | Laboratory, Pharmacy & Prescriptions, Radiology, Walk-in cash services, Appointments |
-| 4 | Inpatient (IPD) with Maternity & Labour Care Guide, Theatre, Oncology, Dental, Dialysis, Blood Bank, Mortuary |
+| 2 (partial) | Vitals & Triage and Consultation implemented; Billing & Cashier (invoices, payments, the cash consultation invoice) remains |
+| 3 (partial) | Laboratory implemented; Pharmacy & Prescriptions, Radiology, Walk-in cash services, and Appointments remain |
+| 4 (partial) | Admission handoff, bed assignment, inpatient census, discharge, and basic inpatient clinical chart implemented; Maternity & Labour Care Guide, Theatre, Oncology, Dental, Dialysis, Blood Bank, Mortuary remain |
 | 5 | SHA e-Claims (Mwavuli Connector), M-Pesa |
 | 6 | Stores & Inventory, Finance & Payroll, Accounts, Fixed Assets, Reports, Users & Security screens, Document reprints |
